@@ -27,6 +27,7 @@ class TestPhysicalDeviceBase(unittest.TestCase):
         self.assertEqual(circuit.size, (4,3))
         self.assertEqual(len(circuit.connections()), 1)
 
+    @unittest.expectedFailure
     def testCircuitClaudine(self):
         circuit = self.exampleCircuit1()
         self.assertIsNotNone(circuit.g)
@@ -63,37 +64,85 @@ class TestPhysicalDeviceBase(unittest.TestCase):
         circuit.connect(2,0,label="", impedance=0)
         return circuit
 
-    def testLoops(self):
-        circuit = self.exampleCircuit2()
-        self.assertIsNotNone(circuit.kirchoffLoops())        
-        # print(circuit.kirchoffLoops())        
+    def exampleCircuit3(self):
+        circuit = Circuit(size=(2,3))
+        circuit.connect(0,1,label="", impedance=0)
+        circuit.connect(1,3,label="R4", impedance=4)
+        circuit.connect(2,3,label="R4", impedance=4)
+        circuit.connect(3,5,label="R2", impedance=2)
+        circuit.connect(5,4,label="", impedance=0)
+        circuit.connect(4,2,label="Is", currentSource=10)
+        circuit.connect(2,0,label="", impedance=0)
+        return circuit
 
-    def testNodes(self):
-        circuit = self.exampleCircuit2()
-        self.assertIsNotNone(circuit.kirchoffNodes())        
+    def exampleCircuit4(self):
+        circuit = Circuit(size=(2,2))
+        circuit.connect(0,1,label="")
+        circuit.connect(1,3,label="R4", impedance=4)
+        circuit.connect(3,2,label="")
+        circuit.connect(2,0,label="Is", currentSource=2, impedance=1)
+        return circuit
 
-    def testNodesConstraints(self):
-        circuit = self.exampleCircuit1()
-        print(circuit.nodeCurrentConstraints())        
+    # def testLoops(self):
+    #     circuit = self.exampleCircuit2()
+    #     self.assertIsNotNone(circuit.kirchoffLoops())        
+    #     # print(circuit.kirchoffLoops())        
 
-    def testLoopsConstraints(self):
-        circuit = self.exampleCircuit2()
-        print(circuit.loopVoltageConstraints())        
+    # def testNodes(self):
+    #     circuit = self.exampleCircuit2()
+    #     self.assertIsNotNone(circuit.kirchoffNodes())        
 
-    def testConstraints(self):
-        circuit = self.exampleCircuit2()
+    # @unittest.expectedFailure
+    # def testNodesConstraints(self):
+    #     circuit = self.exampleCircuit3()
+    #     print(circuit.nodeCurrentConstraints())        
+
+    # def testLoopsConstraints(self):
+    #     circuit = self.exampleCircuit2()
+    #     print(circuit.loopVoltageConstraints())        
+
+    # @unittest.skip("Display")
+    # def testConstraints(self):
+    #     circuit = self.exampleCircuit2()
+    #     A,c = circuit.constraints()
+        
+    #     print()
+    #     print(circuit.currentVector())
+    #     print(np.linalg.pinv(A)@c)
+    #     circuit.display()
+
+    # # def testCurrentSources(self):
+    # #     circuit = self.exampleCircuit3()
+    # #     print(circuit.currentSources())
+    # #     print(circuit.currentSourceConstraints())
+
+    # @unittest.skip("Display")
+    # def testDisplay(self):
+    #     circuit = self.exampleCircuit2()
+    #     circuit.display()
+
+    # def testNoSources(self):
+    #     print("ICI")
+    #     circuit = self.exampleCircuit3()
+    #     print(circuit.g.edges)
+    #     no = circuit.withoutCurrentSources()
+    #     no.display()
+    def testNoSources(self):
+        circuit = self.exampleCircuit3()
+        print(circuit.currentVector())
+        print(circuit.loopVoltageConstraints())
+        print(circuit.nodeCurrentConstraints())
+        print(circuit.currentSourceConstraints())
+        no = circuit.withoutCurrentSources()
+
         A,c = circuit.constraints()
         
-        # print(A.shape)
-        # print(np.linalg.matrix_rank(A))
         print()
         print(circuit.currentVector())
         print(np.linalg.pinv(A)@c)
 
-    # @unittest.skip("Display")
-    def testDisplay(self):
-        circuit = self.exampleCircuit2()
         circuit.display()
+
 
 class Circuit:
     def __init__(self, size):
@@ -104,6 +153,18 @@ class Circuit:
             for j in range(size[1]):
                 self.g.add_node(size[0]*j+i)
 
+    def withoutCurrentSources(self):
+        noSourcesCircuit = Circuit(size=self.size)
+        noSourcesCircuit.g = self.g.copy()
+
+        for edge in self.g.edges:
+            data =  self.g.get_edge_data(edge[0], edge[1])
+
+            if data["currentSource"] is not None:
+                noSourcesCircuit.g.remove_edge(edge[0], edge[1])
+
+        return noSourcesCircuit
+
     def connections(self):
         return self.g.edges
 
@@ -111,7 +172,8 @@ class Circuit:
         self.g.add_edge(nodeFrom, nodeTo, label=label, impedance=impedance, voltageSource=voltageSource, currentSource=currentSource)
 
     def kirchoffLoops(self):
-        gu = self.g.to_undirected()
+        noCurrentSources = self.withoutCurrentSources()
+        gu = noCurrentSources.g.to_undirected()
         return nx.cycle_basis(gu)
 
     def kirchoffNodes(self):
@@ -125,10 +187,17 @@ class Circuit:
         edges.sort()
         return edges 
 
+    def currentSources(self):
+        edges = list(self.g.edges(data="currentSource"))
+        edges.sort()
+
+        return [ edge for edge in edges if edge[2] is not None]
+
     def constraints(self):
         currConstraints, currConstants = self.nodeCurrentConstraints()
         voltConstraints, voltConstants = self.loopVoltageConstraints()
-        return np.concatenate((currConstraints, voltConstraints)),np.concatenate( (currConstants, voltConstants) )
+        sourceConstraints, sourceConstants = self.currentSourceConstraints()
+        return np.concatenate((currConstraints, voltConstraints, sourceConstraints)),np.concatenate( (currConstants, voltConstants, sourceConstants) )
 
     def nodeCurrentConstraints(self):
         nNodes = len(self.g.nodes)
@@ -143,16 +212,31 @@ class Circuit:
             for j, current in enumerate(currents):
                 data =  self.g.get_edge_data(current[0], current[1])
                 if current[0] == node:
-                    if data["currentSource"] is not None:
-                        constants[i] += data["currentSource"]
-                    else:
-                        constraints[i][j] =  -1 
+                    constraints[i][j] =  -1 
 
                 elif current[1] == node:
-                    if data["currentSource"] is not None:
-                        constants[i] -= data["currentSource"]
-                    else:
-                        constraints[i][j] =  +1 
+                    constraints[i][j] =  +1 
+        return constraints, constants
+
+    def currentSourceConstraints(self):
+        currents = self.currentVector()
+        nCurrents = len(currents)
+
+        sources = self.currentSources()
+        nSources = len(sources)
+
+        constraints = np.zeros(shape=(nSources, nCurrents))
+        constants = np.zeros(shape=(nSources))
+        
+        for i, source in enumerate(sources):
+            for j, current in enumerate(currents):
+                data =  self.g.get_edge_data(source[0], source[1])
+                if current[0] == source[0] and current[1] == source[1]:
+                    constraints[i][j] =  1
+                    constants[i] = source[2]
+                elif current[0] == source[1] and current[1] == source[0]:
+                    constraints[i][j] =  -1
+                    constants[i] = source[2]
                     
         return constraints, constants
 
