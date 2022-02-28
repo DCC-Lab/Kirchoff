@@ -27,13 +27,13 @@ class TestPhysicalDeviceBase(unittest.TestCase):
         self.assertEqual(circuit.size, (4,3))
         self.assertEqual(len(circuit.connections()), 1)
 
-    def testCircuitClaudine(self):
-        circuit, constraints = self.exampleCircuit1()
+    def testCircuitElectronicsClass(self):
+        circuit = self.exampleCircuitWithTwoCurrentSources()
         self.assertIsNotNone(circuit.g)
         self.assertEqual(circuit.size, (4,3))
         self.assertEqual(len(circuit.connections()), 15)
 
-    def exampleCircuit1(self):
+    def exampleCircuitWithTwoCurrentSources(self):
         circuit = Circuit(size=(4,3))
         circuit.connect(0,1,label="")
         circuit.connect(1,2,label="R1", impedance=1)
@@ -50,15 +50,20 @@ class TestPhysicalDeviceBase(unittest.TestCase):
         circuit.connect(6,10,label="R1", impedance=1)
         circuit.connect(6,2,label="I_2", currentSource=2)
         circuit.connect(11,7,label="I_4", currentSource=0)
-
+        
         A1,c1 = circuit.loopVoltageConstraints()
         A2,c2= circuit.nodeCurrentConstraints()
-        A3,c3 = np.array([[0,0,0,0,0,0,4,0,0,0,0,0,0,0,-1]]), np.array([0]) 
-        A4,c4 = np.array([[0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0]]), np.array([2]) 
+        # current source I_4 is 4 times the current at edge (5,9)
+        self.assertEqual(circuit.edgeVector()[6], (5,9))
+        A3,c3 = np.array([[0,0,0,0,0,0,4,0,0,0,0,0,0,0,-1]]), np.array([0])
+        # current source at edge (6,2) is 2
+        self.assertEqual(circuit.edgeVector()[7], (6,2))
+        A4,c4 = np.array([[0,0,0,0,0,0,0,1,0,0,0,0,0,0,0]]), np.array([2]) 
         A = np.concatenate( (A1,A2,A3,A4) )
         c = np.concatenate( (c1,c2,c3,c4) )
-
-        return circuit, (A,c)
+        circuit.g.remove_node(4)
+        circuit.manualConstraints = (A,c)
+        return circuit
 
     def exampleCircuit2(self):
         circuit = Circuit(size=(2,3))
@@ -69,7 +74,7 @@ class TestPhysicalDeviceBase(unittest.TestCase):
         circuit.connect(5,4,label="", impedance=0)
         circuit.connect(4,2,label="Vs", voltageSource=10)
         circuit.connect(2,0,label="", impedance=0)
-        return circuit, None
+        return circuit
 
     def exampleCircuit3(self):
         circuit = Circuit(size=(2,3))
@@ -80,7 +85,18 @@ class TestPhysicalDeviceBase(unittest.TestCase):
         circuit.connect(5,4,label="", impedance=0)
         circuit.connect(4,2,label="Is", currentSource=10)
         circuit.connect(2,0,label="", impedance=0)
-        return circuit, None
+        return circuit
+
+    def exampleCircuitParallelResistor(self):
+        circuit = Circuit(size=(2,3))
+        circuit.connect(0,1,label="R2", impedance=2)
+        circuit.connect(1,3,label="",)
+        circuit.connect(2,3,label="R2", impedance=2)
+        circuit.connect(3,5,label="")
+        circuit.connect(5,4,label="")
+        circuit.connect(4,2,label="Vs", voltageSource=10)
+        circuit.connect(2,0,label="")
+        return circuit
 
     def exampleCircuitWithSingleLoopVoltageSource(self):
         circuit = Circuit(size=(2,2))
@@ -88,7 +104,7 @@ class TestPhysicalDeviceBase(unittest.TestCase):
         circuit.connect(1,3,label="R4", impedance=5)
         circuit.connect(3,2,label="")
         circuit.connect(2,0,label="Vs", voltageSource=10)
-        return circuit, None
+        return circuit
 
     def exampleCircuitWithSingleLoopCurrentSource(self):
         circuit = Circuit(size=(2,2))
@@ -96,94 +112,122 @@ class TestPhysicalDeviceBase(unittest.TestCase):
         circuit.connect(1,3,label="R4", impedance=4)
         circuit.connect(3,2,label="")
         circuit.connect(2,0,label="Is", currentSource=2, impedance=1)
-        return circuit, None
+        return circuit
+
+    def exampleCircuitCubeOfResistor(self):
+        circuit = Circuit(size=(4,4))
+        circuit.connect(0,3,label="R", impedance=1)
+        circuit.connect(3,15,label="R", impedance=1)
+        circuit.connect(15,12,label="R", impedance=1)
+        circuit.connect(12,0,label="R", impedance=1)
+
+        circuit.connect(5,6,label="R", impedance=1)
+        circuit.connect(6,10,label="R", impedance=1)
+        circuit.connect(10,9,label="R", impedance=1)
+        circuit.connect(9,5,label="R", impedance=1)
+
+        circuit.connect(0,5,label="R", impedance=1)
+        circuit.connect(3,6,label="R", impedance=1)
+        circuit.connect(15,10,label="R", impedance=1)
+        circuit.connect(12,9,label="R", impedance=1)
+
+        circuit.connect(0,10,label="Vs", voltageSource=10)
+        for n in [1,2,4,7,8,11,13,14]:
+            circuit.g.remove_node(n)
+        return circuit
+
+    def testCurrentSourcesCount(self):
+        circuit = self.exampleCircuitWithTwoCurrentSources()
+        self.assertTrue(circuit.hasCurrentSources)
+        sources = circuit.currentSources()
+        self.assertEqual(len(sources), 2)
+
+    def testVoltageSourcesCount(self):
+        circuit = self.exampleCircuitWithTwoCurrentSources()
+        self.assertTrue(circuit.hasVoltageSources)
+        sources = circuit.voltageSources()
+        self.assertEqual(len(sources), 1)
 
     def testLoopsDefault(self):
-        circuit, constraints = self.exampleCircuitWithSingleLoopVoltageSource()
+        circuit = self.exampleCircuitWithSingleLoopVoltageSource()
         loops = circuit.kirchoffLoops()
         self.assertIsNotNone(loops)
         self.assertEqual(len(loops), 1)
         self.assertEqual(len(loops[0]), len(circuit.g.edges))
 
     def testLoopsWithCurrentSource(self):
-        circuit, constraints = self.exampleCircuitWithSingleLoopCurrentSource()
+        circuit = self.exampleCircuitWithSingleLoopCurrentSource()
         loops = circuit.kirchoffLoops()
         self.assertIsNotNone(loops)
         self.assertEqual(len(loops), 0)
 
     def testLoopsDefaultIsSolvable(self):
-        circuit, constraints = self.exampleCircuitWithSingleLoopVoltageSource()
+        circuit = self.exampleCircuitWithSingleLoopVoltageSource()
         self.assertIsNotNone(circuit.edgeCurrentSolution())
 
     def testLoopsWithCurrentSourceIsSolvable(self):
-        circuit, constraints = self.exampleCircuitWithSingleLoopCurrentSource()
+        circuit = self.exampleCircuitWithSingleLoopCurrentSource()
         self.assertIsNotNone(circuit.edgeCurrentSolution())
 
-    # def testNodes(self):
-    #     circuit, constraints = self.exampleCircuit2()
-    #     self.assertIsNotNone(circuit.kirchoffNodes())        
+    def testRemoveSources(self):
+        circuit = self.exampleCircuitWithTwoCurrentSources()
+        self.assertTrue(circuit.hasCurrentSources)
 
-    # def testNodesConstraints(self):
-    #     circuit, constraints = self.exampleCircuit3()
+        circuitAfter = Circuit(size=(2,2))
+        circuitAfter.g = circuit.withoutCurrentSources()
 
-    # def testLoopsConstraints(self):
-    #     circuit, constraints = self.exampleCircuit2()
-    #     print(circuit.loopVoltageConstraints())        
+        self.assertFalse(circuitAfter.hasCurrentSources)
 
-    @unittest.skip("Display")
-    def testConstraints(self):
-        circuit, constraints = self.exampleCircuit2()
-        A,c = circuit.constraints()
-        
-        print()
-        print(circuit.currentVector())
-        print(np.linalg.pinv(A)@c)
+
+    def testRemoveCurrentSourcesWhenNone(self):
+        circuit = self.exampleCircuitWithSingleLoopVoltageSource()
+        self.assertFalse(circuit.hasCurrentSources)
+
+        g = circuit.withoutCurrentSources()
+
+        circuitAfter = Circuit(size=(2,2))
+        circuitAfter.g = g
+
+        self.assertFalse(circuit.hasCurrentSources)
+        self.assertEqual(circuit.edgeVector(), circuitAfter.edgeVector())
+
+    def testSolution(self):
+        circuit = self.exampleCircuitWithTwoCurrentSources()
+        self.assertIsNotNone(circuit.edgeCurrentSolution())
+
+    def testDisplayNoSolution(self):
+        circuit = self.exampleCircuitWithTwoCurrentSources()
         circuit.display()
 
-    # def testCurrentSources(self):
-    #     circuit = self.exampleCircuit3()
-    #     print(circuit.currentSources())
-    #     print(circuit.currentSourceConstraints())
+    def testDisplaySolution(self):
+        circuit = self.exampleCircuitWithTwoCurrentSources()
+        x = circuit.edgeCurrentSolution()
+        circuit.displaySolution()
 
-    @unittest.skip("Display")
-    def testDisplay(self):
-        circuit, constraints = self.exampleCircuit2()
+    def testParallelResistor(self):
+        circuit = self.exampleCircuitParallelResistor()
+        circuit.displaySolution()
+        solution = circuit.edgeCurrentSolution()
+        srcIdx = circuit.edgeIndex((4,2))
+        sources = circuit.voltageSources()
+        print("Load resistor is: {0:0.3f} ".format(sources[0][2]/solution[srcIdx]))
+
+    def testResistorCube(self):
+        circuit = self.exampleCircuitCubeOfResistor()
         circuit.display()
 
-    def testNoSources(self):
-        print("ICI")
-        circuit, constraints = self.exampleCircuit3()
-        print(circuit.g.edges)
-        no = circuit.withoutCurrentSources()
-        no.display()
+        solution = circuit.edgeCurrentSolution()
+        sources = circuit.voltageSources()
+        src = sources[0]
+        srcIdx = circuit.edgeIndex((src[0],src[1]))
+        print(src[2])
+        print(srcIdx )
 
-    def testNoSources(self):
-        circuit, constraints = self.exampleCircuit1()
-        circuit.g.remove_node(4)
-        print(circuit.currentVector())
-        A1,c1 = circuit.loopVoltageConstraints()
-        # print(A1,c1)
-        A2,c2= circuit.nodeCurrentConstraints()
-        # print(circuit.currentSourceConstraints())
+        print("Load resistor is: {0:0.3f} ".format(src[2]/solution[srcIdx]))
+        print(circuit.edgeVector())
+        print(solution)
 
-        A3,c3 = np.array([[0,0,0,0,0,0,4,0,0,0,0,0,0,0,-1]]), np.array([0]) 
-        A4,c4 = np.array([[0,0,0,0,0,0,0,1, 0,0,0,0,0,0,0]]), np.array([2]) 
-        A = np.concatenate( (A1,A2,A3,A4) )
-        c = np.concatenate( (c1,c2,c3,c4) )
-        
-        print(A)
-        print(c)
-        self.assertEqual(np.linalg.matrix_rank(A), len(circuit.currentVector()))
-        print()
-        # print()
-        print(circuit.currentVector())
-        x = np.linalg.pinv(A)@c
-        print(x)
-        for i, edge in enumerate(circuit.currentVector()):
-            circuit.g.edges[edge]["label"] += " ({0:.2f}A)".format(x[i])
-        circuit.display()
-
-
+        print(circuit.constraints())
 class Circuit:
     def __init__(self, size):
         self.size = size
@@ -192,6 +236,12 @@ class Circuit:
         for i in range(size[0]):
             for j in range(size[1]):
                 self.g.add_node(size[0]*j+i)
+
+    def connections(self):
+        return self.g.edges
+
+    def connect(self, nodeFrom, nodeTo, label, impedance=None, voltageSource=None, currentSource=None):
+        self.g.add_edge(nodeFrom, nodeTo, label=label, impedance=impedance, voltageSource=voltageSource, currentSource=currentSource)
 
     def withoutCurrentSources(self):
         noSources = self.g.copy()
@@ -204,12 +254,6 @@ class Circuit:
 
         return noSources
 
-    def connections(self):
-        return self.g.edges
-
-    def connect(self, nodeFrom, nodeTo, label, impedance=None, voltageSource=None, currentSource=None):
-        self.g.add_edge(nodeFrom, nodeTo, label=label, impedance=impedance, voltageSource=voltageSource, currentSource=currentSource)
-
     def kirchoffLoops(self):
         noCurrentSources = self.withoutCurrentSources()
         gu = noCurrentSources.to_undirected()
@@ -221,6 +265,17 @@ class Circuit:
             nodes[n] = {"out":list(self.g.out_edges(n)), "in":list(self.g.in_edges(n))}
         return nodes
 
+    def edgeIndex(self, edge):
+        indices = []
+        for i, e in enumerate(self.edgeVector()):
+            if (e[0] == edge[0] and e[1] == edge[1]) or (e[0] == edge[1] and e[1] == edge[0]):
+                indices.append(i)
+
+        if len(indices) == 1:
+            return indices[0]
+
+        return indices
+
     def edgeVector(self):
         edges = list(self.g.edges)
         edges.sort()
@@ -229,11 +284,19 @@ class Circuit:
     def currentVector(self):
         return self.edgeVector()
 
+    @property
+    def hasCurrentSources(self):
+        return len(self.currentSources()) != 0
+
     def currentSources(self):
         edges = list(self.g.edges(data="currentSource"))
         edges.sort()
 
         return [ edge for edge in edges if edge[2] is not None]
+
+    @property
+    def hasVoltageSources(self):
+        return len(self.currentSources())
 
     def voltageSources(self):
         edges = list(self.g.edges(data="voltageSource"))
@@ -257,14 +320,14 @@ class Circuit:
     def nodeCurrentConstraints(self):
         nNodes = len(self.g.nodes)
         
-        currents = self.currentVector()
-        nCurrents = len(currents)
+        edges = self.edgeVector()
+        nEdges = len(edges)
 
-        constraints = np.zeros(shape=(nNodes, nCurrents))
+        constraints = np.zeros(shape=(nNodes, nEdges))
         constants = np.zeros(shape=(nNodes))
         
         for i, node in enumerate(self.g.nodes):
-            for j, current in enumerate(currents):
+            for j, current in enumerate(edges):
                 data =  self.g.get_edge_data(current[0], current[1])
                 if current[0] == node:
                     constraints[i][j] =  -1 
@@ -274,63 +337,54 @@ class Circuit:
         return constraints, constants
 
     def currentSourceConstraints(self):
-        currents = self.currentVector()
-        nCurrents = len(currents)
-
         sources = self.currentSources()
         nSources = len(sources)
 
-        constraints = np.zeros(shape=(nSources, nCurrents))
+        edges = self.edgeVector()
+        nEdges = len(edges)
+
+        constraints = np.zeros(shape=(nSources, nEdges))
         constants = np.zeros(shape=(nSources))
         
         for i, source in enumerate(sources):
-            for j, current in enumerate(currents):
-                data =  self.g.get_edge_data(source[0], source[1])
-                if current[0] == source[0] and current[1] == source[1]:
-                    constraints[i][j] =  1
-                    constants[i] = source[2]
-                elif current[0] == source[1] and current[1] == source[0]:
-                    constraints[i][j] =  -1
-                    constants[i] = source[2]
-                    
+            j = self.edgeIndex( (source[0], source[1]) )
+            constraints[i][j] =  1
+            constants[i] = source[2]
+
         return constraints, constants
 
     def loopVoltageConstraints(self):
         loops = self.kirchoffLoops()
         nLoops = len(loops)
 
-        currents = self.currentVector()
-        nCurrents = len(currents)
+        edges = self.edgeVector()
+        nEdges = len(edges)
 
-        constraints = np.zeros(shape=(nLoops, nCurrents))
+        constraints = np.zeros(shape=(nLoops, nEdges))
         constants = np.zeros(shape=(nLoops))
         
         for i, loop in enumerate(loops):
             for j, node in enumerate(loop):
                 forwardEdge = (loop[j-1], node)
                 reverseEdge = (node, loop[j-1])
-                for k, current in enumerate(currents):
-                    if forwardEdge == current:
-                        data =  self.g.get_edge_data(forwardEdge[0], forwardEdge[1])
-                        if data["impedance"] is not None:
-                            constraints[i][k] =  -1 * data["impedance"]
-                        elif data["voltageSource"] is not None:
-                            constants[i] -= data["voltageSource"]
-                    elif reverseEdge == current:
-                        data =  self.g.get_edge_data(reverseEdge[0], reverseEdge[1])
-                        if data["impedance"] is not None:
-                            constraints[i][k] = +1 * data["impedance"]
-                        elif data["voltageSource"] is not None:
-                            constants[i] += data["voltageSource"]
+                for k, edge in enumerate(edges):
+                    if forwardEdge == edge:
+                        direction = +1
+                    elif reverseEdge == edge:
+                        direction = -1
+                    else:
+                        continue
+
+                    data =  self.g.get_edge_data(*edge)
+                    if data["impedance"] is not None:
+                        constraints[i][k] = -direction * data["impedance"]
+                    elif data["voltageSource"] is not None:
+                        constants[i] += -direction * data["voltageSource"]
 
         return constraints, constants
 
     def isSolvable(self):
-        if self.constraints is None:
-            A,c = self.defaultConstraints()
-        else:
-            A,c = self.constraints
-
+        A, c = self.constraints()
         if np.linalg.matrix_rank(A) != len(self.currentVector()):
             raise False
 
@@ -351,22 +405,42 @@ class Circuit:
         for n in self.g.nodes:
             nodePos[n] = (n%w, -(n//w))
 
+        nodeLabelPos = {}
+        for n in self.g.nodes:
+            nodePos[n] = (n%w, -(n//w))
+
         edgeLabels = { (u,v):self.g.get_edge_data(u,v)["label"] for u,v in self.g.edges()}
 
-        nx.draw(
-            self.g, nodePos, edge_color='black', width=3, linewidths=3,
-            node_size=100, node_color='pink', alpha=0.9
+        nx.draw_networkx_nodes(
+            self.g, nodePos, linewidths=3,
+            node_size=200, node_color='gray', alpha=0.9
+        )
+
+        nx.draw_networkx_labels(
+            self.g, nodePos, alpha=0.9
+        )
+
+        nx.draw_networkx_edges(
+            self.g, nodePos, edge_color='black', width=1,
+            node_size=200, alpha=0.9
         )
 
         nx.draw_networkx_edge_labels(
             self.g, nodePos,
-            font_color='red', edge_labels=edgeLabels
+            font_color='black', edge_labels=edgeLabels, verticalalignment='center',
         )
 
         nx.draw_networkx_labels(self.g, nodePos)
         plt.axis('off')
         plt.show()
 
+    def displaySolution(self):
+        x = self.edgeCurrentSolution()
+
+        for i, edge in enumerate(self.edgeVector()):
+            self.g.edges[edge]["label"] = self.g.edges[edge]["label"] + " ({0:.1f}A)".format(x[i])
+
+        self.display()
 
 if __name__ == "__main__":
     unittest.main()
